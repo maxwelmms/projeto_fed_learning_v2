@@ -24,6 +24,7 @@ Isso permite simular cenários reais onde:
 - alguns clientes podem estar comprometidos (poisoned)
 
 Download do dataset [Aqui](https://github.com/sequincozes/CounselorNode/tree/main/data_sbrc2026)
+
 ---
 
 # 🧠 Conceito Central
