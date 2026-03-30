@@ -341,6 +341,11 @@ def run_federated_simulation(
     num_rounds: int,
     fraction_fit: float,
     seed: int,
+    local_epochs: int = 1,
+    client_num_cpus: float = 1.0,
+    client_num_gpus: float = 0.0,
+    ray_init_num_cpus: Optional[int] = None,
+    ray_init_num_gpus: Optional[float] = None,
 ) -> Tuple[Dict[str, List[float]], dict]:
     """
     Função principal da simulação federada.
@@ -448,73 +453,66 @@ def run_federated_simulation(
                 _ensure_model_initialized(model, X_boot, y_boot, all_classes)
                 return get_model_params(model)
 
+            #---------------------------------#
             def fit(self, parameters, config):
-                """
-                Treinamento local do cliente.
-
-                Fluxo:
-                - recebe parâmetros globais do servidor
-                - injeta no modelo local
-                - faz partial_fit com os dados locais
-                - devolve parâmetros atualizados
-                """
                 set_model_params(model, parameters, X_boot, y_boot, all_classes)
 
-                # partial_fit é usado para manter consistência incremental e de classes.
-                model.partial_fit(X_tr_local, y_tr_local, classes=all_classes)
+                # Treino local do cliente antes da agregação (1 ou mais épocas locais por round)
+                for epoch in range(local_epochs):
+                    if epoch == 0:
+                        model.partial_fit(X_tr_local, y_tr_local, classes=all_classes)
+                    else:
+                        model.partial_fit(X_tr_local, y_tr_local)
 
-                # Retorna parâmetros atualizados, número de exemplos e métricas extras vazias.
-                return get_model_params(model), len(X_tr_local), {}
+                # Calcula a métrica LOCAL do cliente antes da agregação
+                fit_metrics = {}
+                if X_te_local.size > 0:
+                    acc, prec, rec, f1 = compute_metrics(model, X_te_local, y_te_local)
 
-            def evaluate(self, parameters, config):
-                """
-                Avaliação local do cliente.
+                    # Salva no JSON do cliente
+                    with open(client_file, "r", encoding="utf-8") as cf:
+                        payload = json.load(cf)
 
-                Fluxo:
-                - recebe parâmetros do servidor
-                - atualiza modelo local
-                - calcula métricas no conjunto local de teste
-                - persiste métricas em JSON por cliente
-                """
-                set_model_params(model, parameters, X_boot, y_boot, all_classes)
+                    payload["metrics"].append(
+                        {
+                            "round": int(config.get("server_round", -1)),
+                            "accuracy": float(acc),
+                            "precision": float(prec),
+                            "recall": float(rec),
+                            "f1": float(f1),
+                            "n_train_local": int(len(X_tr_local)),
+                            "n_test_local": int(len(X_te_local)),
+                        }
+                    )
 
-                # Se não há conjunto local de teste, devolve vazio.
-                if X_te_local.size == 0:
-                    return float(1.0), 0, {}
+                    with open(client_file, "w", encoding="utf-8") as cf:
+                        json.dump(payload, cf, indent=2, ensure_ascii=False)
 
-                # Calcula métricas locais.
-                acc, prec, rec, f1 = compute_metrics(model, X_te_local, y_te_local)
-
-                # Lê histórico atual do cliente.
-                with open(client_file, "r", encoding="utf-8") as cf:
-                    payload = json.load(cf)
-
-                # Acrescenta métricas do round atual.
-                payload["metrics"].append(
-                    {
-                        "round": int(config.get("server_round", -1)),
+                    fit_metrics = {
                         "accuracy": float(acc),
                         "precision": float(prec),
                         "recall": float(rec),
                         "f1": float(f1),
-                        "n_train_local": int(len(X_tr_local)),
-                        "n_test_local": int(len(X_te_local)),
                     }
-                )
 
-                # Regrava o arquivo local atualizado.
-                with open(client_file, "w", encoding="utf-8") as cf:
-                    json.dump(payload, cf, indent=2, ensure_ascii=False)
+                return get_model_params(model), len(X_tr_local), fit_metrics
+            #---------------------------------#
 
-                # O Flower espera loss.
-                # Como não estamos usando loss explícita aqui, usamos 1 - accuracy.
+            def evaluate(self, parameters, config):
+                set_model_params(model, parameters, X_boot, y_boot, all_classes)
+
+                if X_te_local.size == 0:
+                    return float(1.0), 0, {}
+
+                acc, prec, rec, f1 = compute_metrics(model, X_te_local, y_te_local)
+
                 return float(1.0 - acc), len(X_te_local), {
                     "accuracy": float(acc),
                     "precision": float(prec),
                     "recall": float(rec),
                     "f1": float(f1),
                 }
-
+            
         # Flower 1.20 espera Client, então convertemos NumPyClient com to_client().
         return Client().to_client()
 
@@ -583,20 +581,30 @@ def run_federated_simulation(
         on_evaluate_config_fn=lambda server_round: {"server_round": server_round},
     )
 
+    # Importa modulo ray
+    import ray
+    
     # Tenta usar Ray para simulação paralela.
-    try:
-        import ray
 
-        if not ray.is_initialized():
-            ray.init(ignore_reinit_error=True, include_dashboard=False, logging_level="ERROR")
+    ray_init_kwargs = {
+        "ignore_reinit_error": True,
+        "include_dashboard": False,
+        "logging_level": "ERROR",
+    }
 
-        # Cada cliente virtual usa 1 CPU.
-        client_resources = {"num_cpus": 1}
+    if ray_init_num_cpus is not None:
+        ray_init_kwargs["num_cpus"] = ray_init_num_cpus
 
-    except Exception as e:
-        # Se Ray falhar, continua sem especificar recursos.
-        log.warning("[SIM] Ray não pôde inicializar (%s). Continuando sem especificar recursos.", e)
-        client_resources = None
+    if ray_init_num_gpus is not None:
+        ray_init_kwargs["num_gpus"] = ray_init_num_gpus
+
+    if not ray.is_initialized():
+        ray.init(**ray_init_kwargs)
+
+    client_resources = {
+        "num_cpus": client_num_cpus,
+        "num_gpus": client_num_gpus,
+    }
 
     # Importa a função de simulação do Flower.
     from flwr.simulation import start_simulation
@@ -623,6 +631,9 @@ def run_federated_simulation(
         "clients": num_clients,
         "rounds": num_rounds,
         "fraction_fit": frac_fit,
+        "local_epochs": local_epochs,
+        "client_num_cpus": client_num_cpus,
+        "client_num_gpus": client_num_gpus,
         "target_col": data.target_col,
         "feature_count": len(data.feature_names),
         "classes": data.classes,
@@ -672,6 +683,11 @@ def parse_args():
     p.add_argument("--local-eval-source", type=str, choices=["split", "global"], default="split", help="Fonte da avaliação local dos clientes")
     p.add_argument("--seed", type=int, default=42, help="Semente RNG")
     p.add_argument("--run-id", type=str, default=None, help="Identificador da execução")
+    p.add_argument("--local-epochs", type=int, default=1, help="Número de épocas locais por round")
+    p.add_argument("--client-num-cpus", type=float, default=1.0, help="CPUs por cliente virtual")
+    p.add_argument("--client-num-gpus", type=float, default=0.0, help="GPUs por cliente virtual")
+    p.add_argument("--ray-init-num-cpus", type=int, default=None, help="Total de CPUs expostas ao Ray")
+    p.add_argument("--ray-init-num-gpus", type=float, default=None, help="Total de GPUs expostas ao Ray")
     
     return p.parse_args()
 
@@ -693,6 +709,15 @@ def main():
 
     # Lê argumentos CLI.
     args = parse_args()
+
+    if args.local_epochs < 1:
+        raise ValueError("--local-epochs deve ser >= 1")
+    
+    if args.client_num_cpus <= 0:
+        raise ValueError("--client-num-cpus deve ser > 0")
+
+    if args.client_num_gpus < 0:
+        raise ValueError("--client-num-gpus deve ser >= 0")
 
     # Marca tempo inicial.
     start = time.time()
@@ -741,6 +766,11 @@ def main():
         num_rounds=args.rounds,
         fraction_fit=args.fraction_fit,
         seed=args.seed,
+        local_epochs=args.local_epochs,
+        client_num_cpus=args.client_num_cpus,
+        client_num_gpus=args.client_num_gpus,
+        ray_init_num_cpus=args.ray_init_num_cpus,
+        ray_init_num_gpus=args.ray_init_num_gpus,
     )
 
     # Gera plots globais automáticos.
@@ -757,6 +787,11 @@ def main():
                 "classes": data.classes,
                 "final": final,
                 "local_eval_source": args.local_eval_source, # Adiciona a fonte da avaliação local ao summary final
+                "local_epochs": args.local_epochs,
+                "client_num_cpus": args.client_num_cpus,
+                "client_num_gpus": args.client_num_gpus,
+                "ray_init_num_cpus": args.ray_init_num_cpus,
+                "ray_init_num_gpus": args.ray_init_num_gpus,
             },
             f,
             indent=2,

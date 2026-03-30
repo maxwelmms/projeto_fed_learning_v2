@@ -90,6 +90,8 @@ def load_clients_json(path):
                     "precision": float(m.get("precision", np.nan)),
                     "recall": float(m.get("recall", np.nan)),
                     "f1": float(m.get("f1", np.nan)),
+                    "poisoned": bool(m.get("poisoned", False)),
+                    "poison_rate": float(m.get("poison_rate", 0.0)),
 
                     # Tamanhos locais de treino e teste.
                     # Isso é útil para auditoria e inspeção de heterogeneidade.
@@ -139,6 +141,9 @@ def plot_heatmap_accuracy(df, outdir):
     # índice = cliente
     # colunas = round
     # valor = accuracy média
+    if df.empty:
+        return None
+    
     pvt = df.pivot_table(index="client", columns="round", values="accuracy", aggfunc="mean")
 
     # Tamanho da figura:
@@ -354,15 +359,12 @@ def main():
     # Lista para armazenar os caminhos dos gráficos gerados.
     paths = []
 
-    # Só gera gráficos se o DataFrame não estiver vazio.
-    if not df.empty:
-        # Heatmap de acurácia.
+    # Só gera gráficos se houver dados
+    if df.empty:
+        print("[WARN] Nenhum dado de cliente disponível")
+    else:
         paths.append(plot_heatmap_accuracy(df, args.outdir))
-
-        # Curvas médias por round.
         paths.extend(plot_mean_curves(df, args.outdir))
-
-        # Barras da acurácia final.
         paths.append(plot_final_bars(df, args.outdir))
 
     # Exibe no terminal os arquivos gerados.

@@ -163,11 +163,10 @@ def main():
 
     Esse script transforma a comparação tabular em visualização e resumo.
     """
-
     # Cria parser de argumentos.
     parser = argparse.ArgumentParser(description="Analisa CSV de comparação clean vs poisoned")
 
-    # CSV gerado pelo compare_export.py
+     # CSV gerado pelo compare_export.py
     parser.add_argument("--csv", required=True, help="CSV gerado por compare_export.py")
 
     # Diretório de saída dos gráficos e do summary.
@@ -179,8 +178,19 @@ def main():
     # Garante que o diretório de saída exista.
     os.makedirs(args.outdir, exist_ok=True)
 
-    # Lê o CSV em DataFrame.
+    # 1. primeiro carrega o CSV
     df = pd.read_csv(args.csv)
+
+    # Valida se não está vazio
+    if df.empty:
+        print("[WARN] CSV vazio")
+        return
+
+    # 2. Depois organiza
+    df = df.sort_values("round").reset_index(drop=True)
+    
+    # 3. Limpeza opcional
+    df = df.dropna(subset=["round"])
 
     # Lista dos caminhos dos arquivos gerados.
     paths = []
@@ -203,15 +213,12 @@ def main():
         paths.append(plot_delta(df, metric, args.outdir))
 
         # Estatísticas resumidas da métrica.
+        col = df[f"delta_{metric}"].dropna()
+
         summary["metrics"][metric] = {
-            # Média do delta ao longo dos rounds.
-            "delta_mean": float(df[f"delta_{metric}"].mean()),
-
-            # Delta no último round.
-            "delta_final": float(df[f"delta_{metric}"].iloc[-1]),
-
-            # Maior delta observado.
-            "delta_max": float(df[f"delta_{metric}"].max()),
+            "delta_mean": float(col.mean()) if not col.empty else None,
+            "delta_final": float(col.iloc[-1]) if not col.empty else None,
+            "delta_max": float(col.max()) if not col.empty else None,
         }
 
     # Caminho do JSON resumo.

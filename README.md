@@ -173,6 +173,7 @@ python src/analyze.py \
   --rounds 15 \
   --fraction-fit 1.0 \
   --local-eval-size 0.2 \
+  --local-epochs 1 \
   --seed 42 \
   --run-id exp1
 ```
@@ -182,13 +183,48 @@ Execução com avaliação global:
 ```bash
 python src/analyze.py \
   --client-csvs data/treino_no1.csv,data/no2.csv,data/no3.csv \
-  --eval-csv data/teste_no1.csv \
+  --eval-csv data/teste_global.csv \
   --local-eval-source global \
   --rounds 15 \
   --fraction-fit 1.0 \
+  --local-epochs 1 \
   --seed 42 \
-  --run-id exp_global
+  --run-id exp1_global
 ```
+
+Execução com treino local mais forte (recomendado):
+
+```bash
+python src/analyze.py \
+  --client-csvs data/no1_train.csv,data/no2_train.csv,data/no3_train.csv \
+  --eval-csv data/test.csv \
+  --local-eval-source global \
+  --rounds 50 \
+  --fraction-fit 1.0 \
+  --local-epochs 3 \
+  --client-num-cpus 1 \
+  --ray-init-num-cpus 4 \
+  --seed 42 \
+  --run-id exp1_strong
+```
+
+Execução mais realista (clientes parciais por round):
+
+```bash
+python src/analyze.py \
+  --client-csvs data/no1_train.csv,data/no2_train.csv,data/no3_train.csv \
+  --eval-csv data/test.csv \
+  --local-eval-source global \
+  --rounds 50 \
+  --fraction-fit 0.66 \
+  --local-epochs 3 \
+  --client-num-cpus 1 \
+  --ray-init-num-cpus 4 \
+  --seed 42 \
+  --run-id exp1_partial
+```
+
+# 
 
 # 📊 Saídas
 `results.json`

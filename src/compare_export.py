@@ -130,12 +130,21 @@ def main():
     # - delta < 0  => poisoned melhor que clean
     # - delta = 0  => empate
     for metric in ["accuracy", "precision", "recall", "f1"]:
-        df[f"delta_{metric}"] = df[f"{metric}_clean"] - df[f"{metric}_poison"]
+        c = f"{metric}_clean"
+        p = f"{metric}_poison"
+
+    # garante colunas mesmo se faltarem
+        if c not in df:
+            df[c] = pd.NA
+        if p not in df:
+            df[p] = pd.NA
+
+        df[f"delta_{metric}"] = df[c] - df[p]
 
     # Garante que a pasta de saída do CSV exista.
     # os.path.dirname(...) pode retornar string vazia se o arquivo estiver na pasta atual,
     # então usamos "or '.'" como fallback.
-    os.makedirs(os.path.dirname(args.out-csv) or ".", exist_ok=True)
+    os.makedirs(os.path.dirname(args.out_csv) or ".", exist_ok=True)
 
     # Salva o CSV combinado round a round.
     # Esse CSV será usado depois pelo analyze_results.py para gerar gráficos comparativos.
